@@ -41,11 +41,11 @@ local Opcode	= { -- Opcode types.
 local function gBit(Bit, Start, End) -- No tail-calls, yay.
 	if End then -- Thanks to cntkillme for giving input on this shorter, better approach.
 		local Res	= (Bit / 2 ^ (Start - 1)) % 2 ^ ((End - 1) - (Start - 1) + 1);
-		
+
 		return Res - Res % 1;
 	else
 		local Plc = 2 ^ (Start - 1);
-		
+
 		if (Bit % (Plc + Plc) >= Plc) then
 			return 1; -- Check if within range.
 		else
@@ -81,7 +81,7 @@ local function GetMeaning(ByteString)
 
 	local function gFloat() -- Besides the 0 check, this part remained mostly static.
 		local A, B	= gBits32(), gBits32();
-		
+
 		if ((A + B) == 0) then
 			return 0; -- Float 0 tends to be very messy, so this is a temp fix until I figure out what's up.
 		else
@@ -298,7 +298,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B		= Inst[2];
 			local C		= Inst[3];
 			local Stk	= Stack;
-			
+
 			B = Stk[B];
 
 			if (C > 255) then
@@ -306,14 +306,14 @@ local function Wrap(Chunk, Env, Upvalues)
 			else
 				C	= Stk[C];
 			end;
-			
+
 			Stk[A + 1]	= B;
 			Stk[A]		= B[C];
 		elseif (Enum == 12) then -- ADD
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -331,7 +331,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -349,7 +349,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -367,7 +367,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -385,7 +385,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -403,7 +403,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -440,7 +440,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -461,7 +461,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -482,7 +482,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local B	= Inst[2];
 			local C	= Inst[3];
 			local Stk, Con	= Stack, Const;
-			
+
 			if (B > 255) then
 				B	= Const[B - 256];
 			else
@@ -517,7 +517,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local Stk	= Stack;
 			local Args, Results;
 			local Limit, Loop;
-			
+
 			Args	= {};
 
 			if (B ~= 1) then
@@ -526,7 +526,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				else
 					Limit = Top;
 				end;
-				
+
 				Loop	= 0;
 
 				for Idx = A + 1, Limit do
@@ -534,21 +534,21 @@ local function Wrap(Chunk, Env, Upvalues)
 
 					Args[Loop] = Stk[Idx];
 				end;
-				
+
 				Limit, Results = _Returns(Stk[A](unpack(Args, 1, Limit - A)));
 			else
 				Limit, Results = _Returns(Stk[A]());
 			end;
-			
+
 			Top = A - 1;
-		
+
 			if (C ~= 1) then
 				if (C ~= 0) then
 					Limit = A + C - 2;
 				else
 					Limit = Limit + A;
 				end;
-				
+
 				Loop	= 0;
 
 				for Idx = A, Limit do
@@ -573,7 +573,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				else
 					Limit = Top;
 				end
-				
+
 				Loop = 0;
 
 				for Idx = A + 1, Limit do
@@ -581,12 +581,12 @@ local function Wrap(Chunk, Env, Upvalues)
 
 					Args[#Args + 1] = Stk[Idx];
 				end
-				
+
 				Results = {Stk[A](unpack(Args, 1, Limit - A))};
 			else
 				Results = {Stk[A]()};
 			end;
-			
+
 			return true, Results;
 		elseif (Enum == 30) then -- RETURN
 			local A	= Inst[1]; -- TODO: Work out why RETURN doesn't always get called.
@@ -602,7 +602,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			else
 				Limit	= A + B - 2;
 			end;
-			
+
 			Output = {};
 
 			local Loop	= 0;
@@ -622,40 +622,40 @@ local function Wrap(Chunk, Env, Upvalues)
 			local Index	= Stk[A] + Step;
 
 			Stk[A]	= Index;
-			
+
 			if (Step > 0) then
 				if Index <= Stk[A + 1] then
 					InstrPoint	= InstrPoint + Inst[2];
-					
+
 					Stk[A + 3] = Index;
 				end;
 			else
 				if Index >= Stk[A + 1] then
 					InstrPoint	= InstrPoint + Inst[2];
-					
+
 					Stk[A + 3] = Index;
 				end
 			end
 		elseif (Enum == 32) then -- FORPREP
 			local A		= Inst[1];
 			local Stk	= Stack;
-			
+
 			Stk[A]	= Stk[A] - Stk[A + 2];
 
-			InstrPoint	= InstrPoint + Inst[2]; 
+			InstrPoint	= InstrPoint + Inst[2];
 		elseif (Enum == 33) then -- TFORLOOP
 			local A		= Inst[1];
 			local B		= Inst[2];
 			local C		= Inst[3];
 			local Stk	= Stack;
-			
+
 			local Offset	= A + 2;
 			local Result	= {Stk[A](Stk[A + 1], Stk[A + 2])};
 
 			for Idx = 1, C do
 				Stack[Offset + Idx] = Result[Idx];
 			end;
-			
+
 			if (Stk[A + 3] ~= nil) then
 				Stk[A + 2]	= Stk[A + 3];
 			else
@@ -672,14 +672,14 @@ local function Wrap(Chunk, Env, Upvalues)
 			else
 				local Offset	= (C - 1) * 50;
 				local T			= Stk[A]; -- Assuming T is the newly created table.
-				
+
 				if (B == 0) then
 					B	= Top;
 				end;
 
 				for Idx = 1, B do
 					T[Offset + Idx] = Stk[A + Idx];
-				end;			
+				end;
 			end;
 		elseif (Enum == 35) then -- CLOSE
 			-- TODO: Will also implement once I find out what it's for.
@@ -687,7 +687,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			local Proto	= Proto[Inst[2]];
 			local Instr = Instr;
 			local Stk	= Stack;
-			
+
 			local Indexes	= {};
 			local NewUvals	= setmetatable({}, {
 					__index = function(_, Key)
@@ -714,13 +714,13 @@ local function Wrap(Chunk, Env, Upvalues)
 
 				InstrPoint	= InstrPoint + 1;
 			end;
-			
+
 			Stk[Inst[1]]	= Wrap(Proto, Env, NewUvals);
 		elseif (Enum == 37) then -- VARARG
 			local A	= Inst[1];
 			local B	= Inst[2];
 			local Stk, Vararg	= Stack, Vararg;
-			
+
 			for Idx = A, A + (B > 0 and B - 1 or Varargsz) do
 				Stk[Idx]	= Vararg[Idx - A];
 			end;
@@ -731,7 +731,7 @@ local function Wrap(Chunk, Env, Upvalues)
 		local Name	= Chunk.Name or 'Code';
 		local Line	= Chunk.Lines[InstrPoint] or '?';
 		local Err	= Err:match'^.+:%s*(.+)' or Err;
-		
+
 		error(string.format('%s (%s): %s', Name, Line, Err), 0);
 	end;
 
@@ -739,14 +739,14 @@ local function Wrap(Chunk, Env, Upvalues)
 		local pcall	= pcall;
 		local Instr	= Instr;
 		local Inst, A, B, R;
-		
+
 		while true do
 			Inst	= Instr[InstrPoint];
-			
+
 			if (not Inst) then
 				return B;
 			end;
-			
+
 			InstrPoint	= InstrPoint + 1;
 
 			R, A, B	= pcall(COpcode, Inst.Enum, Inst);
@@ -790,7 +790,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			LStack[Idx] = Args[Idx + 1];
 			Vararg[Idx] = Args[Idx + 1];
 		end;
-		
+
 		local A, B		= pcall(Loop); -- What *would* be the difference between routining and pcalling this?
 
 		if A then -- We're always expecting this to come out true (because errorless code)
@@ -807,6 +807,6 @@ end;
 
 return function(BCode, Env) -- lua_function LoadBytecode (string BCode, table Env)
 	local Buffer	= GetMeaning(BCode);
-	
+
 	return Wrap(Buffer, Env or getfenv(0)), Buffer;
 end;
