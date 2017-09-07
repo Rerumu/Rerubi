@@ -179,14 +179,14 @@ local function GetMeaning(ByteString)
 			end;
 
 			for Idx = 1, gInt() do -- Locals in stack.
-				gString();
-				gBits32();
-				gBits32();
-			end; -- Might actually implement later as a sublibrary.
+				gString(); -- Name of local.
+				gBits32(); -- Starting point.
+				gBits32(); -- End point.
+			end;
 
 			for Idx = 1, gInt() do -- Upvalues.
-				gString();
-			end; -- I found no use for locals and upvals either so I did not implement them either.
+				gString(); -- Name of upvalue.
+			end;
 		end;
 
 		return Chunk; -- Finished chunk.
@@ -213,7 +213,7 @@ local function GetMeaning(ByteString)
 		if (Sizet == 4) then
 			gSizet	= gBits32;
 		elseif (Sizet == 8) then
-			gSizet	= gBits64
+			gSizet	= gBits64;
 		else
 			error("Unsupported bytecode target platform", 2);
 		end;
