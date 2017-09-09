@@ -2,6 +2,12 @@ local Concat	= table.concat;
 local Select	= select;
 local _Byte		= string.byte;
 local Sub		= string.sub;
+
+local setmetatable	= setmetatable;
+local getfenv		= getfenv;
+local unpack		= unpack;
+local pcall			= pcall;
+
 local Opcode	= { -- Opcode types.
 	'ABC',	'ABx',	'ABC',	'ABC';
 	'ABC',	'ABx',	'ABC',	'ABx';
