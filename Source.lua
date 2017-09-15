@@ -2,12 +2,6 @@ local Concat	= table.concat;
 local Select	= select;
 local _Byte		= string.byte;
 local Sub		= string.sub;
-
-local setmetatable	= setmetatable;
-local getfenv		= getfenv;
-local unpack		= unpack;
-local pcall			= pcall;
-
 local Opcode	= { -- Opcode types.
 	'ABC',	'ABx',	'ABC',	'ABC';
 	'ABC',	'ABx',	'ABC',	'ABx';
@@ -24,23 +18,23 @@ local Opcode	= { -- Opcode types.
 -- rlbi author -> Rerumu (Shining_Diamando)
 
 --[[
-	Consider this a direct upgrade to the beauty that stravant left behind.
+	Consider this a direct upgrade to the beauty that stravant (and some other people..? Dunno the details) left behind.
 	This "new" version includes:
 		* Almost complete rework (most things reworked from scratch)
-		* Visible performance improvements
+		* Visible performance improvements (wayyyy faster)
 		* Upvalue error fixes
 		* C Stack overflow fixes (most cases anyways)
 		* Fixed missing "return" errors
 		* Solved 0 const being treated as "1.1125369292536e-308"
 		* A more readable format for easier editing of the code
+		* No fix/addition to SETLIST, as 25550 items in initializing a list isn't realistic
+		* Tailcalls, threading and stack-sharing fixed
 --]]
 
 --[[
 	TODO LIST:
-		* Fix tailcalls not properly working (and recursion in general)
-		* Implement CLOSE (whatever it may do)
-		* Figure out extended SETLIST (same as CLOSE)
-		* Sometimes return doesn't work? Maybe it's just me.
+		* Implement CLOSE (maybe? Doesn't seem to need one in regular Lua)
+		* Maybe some more optimizations
 --]]
 
 -- 1 BYTE = 8 BITS; 4 byte instructions = 32 bit instructions.
@@ -53,7 +47,7 @@ local function gBit(Bit, Start, End) -- No tail-calls, yay.
 		local Plc = 2 ^ (Start - 1);
 
 		if (Bit % (Plc + Plc) >= Plc) then
-			return 1; -- Check if within range.
+			return 1;
 		else
 			return 0;
 		end;
@@ -85,7 +79,7 @@ local function GetMeaning(ByteString)
 		return gBits32() * 4294967296 + gBits32();
 	end;
 
-	local function gFloat() -- Besides the 0 check, this part remained mostly static.
+	local function gFloat()
 		local A, B	= gBits32(), gBits32();
 
 		if ((A + B) == 0) then
@@ -239,543 +233,24 @@ local function Wrap(Chunk, Env, Upvalues)
 	local Const	= Chunk.Const;
 	local Proto	= Chunk.Proto;
 
-	local Stack, Top;
-	local InstrPoint	= 1;
-
-	local Vararg, Varargsz;
-
-	local function COpcode(Enum, Inst) -- Opcodes re-implemented into a function for performance!
-		if (Enum == 0) then -- MOVE
-			Stack[Inst[1]]	= Stack[Inst[2]];
-		elseif (Enum == 1) then -- LOADK
-			Stack[Inst[1]]	= Const[Inst[2]];
-		elseif (Enum == 2) then -- LOADBOOL
-			Stack[Inst[1]]	= (Inst[2] ~= 0);
-
-			if (Inst[3] ~= 0) then
-				InstrPoint	= InstrPoint + 1;
-			end;
-		elseif (Enum == 3) then -- LOADNIL
-			local Stk	= Stack; -- Since this moves it down.
-
-			for Idx = Inst[1], Inst[2] do
-				Stk[Idx]	= nil;
-			end;
-		elseif (Enum == 4) then -- GETUPVAL
-			Stack[Inst[1]]	= Upvalues[Inst[2]];
-		elseif (Enum == 5) then -- GETGLOBAL
-			Stack[Inst[1]]	= Env[Const[Inst[2]]];
-		elseif (Enum == 6) then -- GETTABLE
-			local C		= Inst[3];
-			local Stk	= Stack;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]]	= Stk[Inst[2]][C];
-		elseif (Enum == 7) then -- SETGLOBAL
-			Env[Const[Inst[2]]]	= Stack[Inst[1]];
-		elseif (Enum == 8) then -- SETUPVAL
-			Upvalues[Inst[2]]	= Stack[Inst[1]];
-		elseif (Enum == 9) then -- SETTABLE
-			local B, C	= Inst[2], Inst[3];
-			local Stk	= Stack;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]][B]	= C;
-		elseif (Enum == 10) then -- NEWTABLE
-			Stack[Inst[1]]	= {};
-		elseif (Enum == 11) then -- SELF
-			local A		= Inst[1];
-			local B		= Inst[2];
-			local C		= Inst[3];
-			local Stk	= Stack;
-
-			B = Stk[B];
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[A + 1]	= B;
-			Stk[A]		= B[C];
-		elseif (Enum == 12) then -- ADD
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]]	= B + C;
-		elseif (Enum == 13) then -- SUB
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]]	= B - C;
-		elseif (Enum == 14) then -- MUL
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]]	= B * C;
-		elseif (Enum == 15) then -- DIV
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]]	= B / C;
-		elseif (Enum == 16) then -- MOD
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]]	= B % C;
-		elseif (Enum == 17) then -- POW
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			Stk[Inst[1]]	= B ^ C;
-		elseif (Enum == 18) then -- UNM
-			Stack[Inst[1]]	= -Stack[Inst[2]];
-		elseif (Enum == 19) then -- NOT
-			Stack[Inst[1]]	= (not Stack[Inst[2]]);
-		elseif (Enum == 20) then -- LEN
-			Stack[Inst[1]]	= #Stack[Inst[2]];
-		elseif (Enum == 21) then -- CONCAT
-			local Stk	= Stack;
-			local B		= Inst[2];
-			local K		= {Stack[B]};
-
-			for Idx = B + 1, Inst[3] do
-				K[#K + 1]	= Stk[Idx];
-			end;
-
-			Stack[Inst[1]]	= Concat(K);
-		elseif (Enum == 22) then -- JUMP
-			InstrPoint	= InstrPoint + Inst[2];
-		elseif (Enum == 23) then -- EQ
-			local A	= Inst[1] ~= 0;
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			if (B == C) ~= A then
-				InstrPoint	= InstrPoint + 1;
-			end;
-		elseif (Enum == 24) then -- LT
-			local A	= Inst[1] ~= 0;
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			if (B < C) ~= A then
-				InstrPoint	= InstrPoint + 1;
-			end;
-		elseif (Enum == 25) then -- LE
-			local A	= Inst[1] ~= 0;
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk, Con	= Stack, Const;
-
-			if (B > 255) then
-				B	= Const[B - 256];
-			else
-				B	= Stk[B];
-			end;
-
-			if (C > 255) then
-				C	= Const[C - 256];
-			else
-				C	= Stk[C];
-			end;
-
-			if (B <= C) ~= A then
-				InstrPoint	= InstrPoint + 1;
-			end;
-		elseif (Enum == 26) then -- TEST
-			if (not not Stack[Inst[1]]) == (Inst[3] == 0) then
-				InstrPoint	= InstrPoint + 1;
-			end;
-		elseif (Enum == 27) then -- TESTSET
-			local B	= Stack[Inst[2]];
-
-			if (not not B) == (Inst[3] == 0) then
-				InstrPoint	= InstrPoint;
-			else
-				Stack[Inst[1]] = B;
-			end;
-		elseif (Enum == 28) then -- CALL
-			local A	= Inst[1];
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk	= Stack;
-			local Args, Results;
-			local Limit, Loop;
-
-			Args	= {};
-
-			if (B ~= 1) then
-				if (B ~= 0) then
-					Limit = A + B - 1;
-				else
-					Limit = Top;
-				end;
-
-				Loop	= 0;
-
-				for Idx = A + 1, Limit do
-					Loop = Loop + 1;
-
-					Args[Loop] = Stk[Idx];
-				end;
-
-				Limit, Results = _Returns(Stk[A](unpack(Args, 1, Limit - A)));
-			else
-				Limit, Results = _Returns(Stk[A]());
-			end;
-
-			Top = A - 1;
-
-			if (C ~= 1) then
-				if (C ~= 0) then
-					Limit = A + C - 2;
-				else
-					Limit = Limit + A;
-				end;
-
-				Loop	= 0;
-
-				for Idx = A, Limit do
-					Loop = Loop + 1;
-
-					Stk[Idx] = Results[Loop];
-				end;
-			end;
-		elseif (Enum == 29) then -- TAILCALL
-			local A	= Inst[1];
-			local B	= Inst[2];
-			local C	= Inst[3];
-			local Stk	= Stack;
-			local Args, Results;
-			local Limit, Loop;
-
-			Args = {};
-
-			if (B ~= 1) then
-				if (B ~= 0) then
-					Limit = A + B - 1;
-				else
-					Limit = Top;
-				end
-
-				Loop = 0;
-
-				for Idx = A + 1, Limit do
-					Loop = Loop + 1;
-
-					Args[#Args + 1] = Stk[Idx];
-				end
-
-				Results = {Stk[A](unpack(Args, 1, Limit - A))};
-			else
-				Results = {Stk[A]()};
-			end;
-
-			return true, Results;
-		elseif (Enum == 30) then -- RETURN
-			local A	= Inst[1]; -- TODO: Work out why RETURN doesn't always get called.
-			local B	= Inst[2];
-			local Stk	= Stack;
-			local Loop, Output;
-			local Limit;
-
-			if (B == 1) then
-				return true;
-			elseif (B == 0) then
-				Limit	= Top;
-			else
-				Limit	= A + B - 2;
-			end;
-
-			Output = {};
-
-			local Loop	= 0;
-
-			for Idx = A, Limit do
-				Loop	= Loop + 1;
-
-				Output[Loop] = Stk[Idx];
-			end;
-
-			return true, Output;
-		elseif (Enum == 31) then -- FORLOOP
-			local A		= Inst[1];
-			local Stk	= Stack;
-
-			local Step	= Stk[A + 2];
-			local Index	= Stk[A] + Step;
-
-			Stk[A]	= Index;
-
-			if (Step > 0) then
-				if Index <= Stk[A + 1] then
-					InstrPoint	= InstrPoint + Inst[2];
-
-					Stk[A + 3] = Index;
-				end;
-			else
-				if Index >= Stk[A + 1] then
-					InstrPoint	= InstrPoint + Inst[2];
-
-					Stk[A + 3] = Index;
-				end
-			end
-		elseif (Enum == 32) then -- FORPREP
-			local A		= Inst[1];
-			local Stk	= Stack;
-
-			Stk[A]	= Stk[A] - Stk[A + 2];
-
-			InstrPoint	= InstrPoint + Inst[2];
-		elseif (Enum == 33) then -- TFORLOOP
-			local A		= Inst[1];
-			local B		= Inst[2];
-			local C		= Inst[3];
-			local Stk	= Stack;
-
-			local Offset	= A + 2;
-			local Result	= {Stk[A](Stk[A + 1], Stk[A + 2])};
-
-			for Idx = 1, C do
-				Stack[Offset + Idx] = Result[Idx];
-			end;
-
-			if (Stk[A + 3] ~= nil) then
-				Stk[A + 2]	= Stk[A + 3];
-			else
-				InstrPoint	= InstrPoint + 1;
-			end;
-		elseif (Enum == 34) then -- SETLIST
-			local A		= Inst[1];
-			local B		= Inst[2];
-			local C		= Inst[3];
-			local Stk	= Stack;
-
-			if (C == 0) then
-				error("NYI: extended SETLIST"); -- TODO: Will research and implement if I can find what it's for.
-			else
-				local Offset	= (C - 1) * 50;
-				local T			= Stk[A]; -- Assuming T is the newly created table.
-
-				if (B == 0) then
-					B	= Top;
-				end;
-
-				for Idx = 1, B do
-					T[Offset + Idx] = Stk[A + Idx];
-				end;
-			end;
-		elseif (Enum == 35) then -- CLOSE
-			-- TODO: Will also implement once I find out what it's for.
-		elseif (Enum == 36) then -- CLOSURE
-			local Proto	= Proto[Inst[2]];
-			local Instr = Instr;
-			local Stk	= Stack;
-
-			local Indexes	= {};
-			local NewUvals	= setmetatable({}, {
-					__index = function(_, Key)
-						local Val	= Indexes[Key];
-
-						return Val[1][Val[2]];
-					end,
-					__newindex = function(_, Key, Value)
-						local Val	= Indexes[Key];
-
-						Val[1][Val[2]]	= Value;
-					end;
-				}
-			);
-
-			for Idx = 1, Proto.Upvals do
-				local Mvm	= Instr[InstrPoint];
-
-				if (Mvm.Enum == 0) then -- MOVE
-					Indexes[Idx - 1] = {Stk, Mvm[2]};
-				elseif (Mvm.Enum == 4) then -- GETUPVAL
-					Indexes[Idx - 1] = {Upvalues, Mvm[2]};
-				end;
-
-				InstrPoint	= InstrPoint + 1;
-			end;
-
-			Stk[Inst[1]]	= Wrap(Proto, Env, NewUvals);
-		elseif (Enum == 37) then -- VARARG
-			local A	= Inst[1];
-			local B	= Inst[2];
-			local Stk, Vararg	= Stack, Vararg;
-
-			for Idx = A, A + (B > 0 and B - 1 or Varargsz) do
-				Stk[Idx]	= Vararg[Idx - A];
-			end;
-		end;
-	end;
-
-	local function OnError(Err) -- Handle your errors in whatever way.
+	local function OnError(Err, Position) -- Handle your errors in whatever way.
 		local Name	= Chunk.Name or 'Code';
-		local Line	= Chunk.Lines[InstrPoint] or '?';
+		local Line	= Chunk.Lines[Position] or '?';
 		local Err	= Err:match'^.+:%s*(.+)' or Err;
 
 		error(string.format('%s (%s): %s', Name, Line, Err), 0);
 	end;
 
-	local function Loop()
-		local pcall	= pcall;
-		local Instr	= Instr;
-		local Inst, A, B, R;
-
-		while true do
-			Inst	= Instr[InstrPoint];
-
-			if (not Inst) then
-				return B;
-			end;
-
-			InstrPoint	= InstrPoint + 1;
-
-			R, A, B	= pcall(COpcode, Inst.Enum, Inst);
-
-			if R then
-				if A then
-					return B;
-				end;
-			else
-				OnError(A);
-
-				break;
-			end;
-		end;
-	end;
-
 	return function(...) -- Returned function to run bytecode chunk (Don't be stupid, you can't setfenv this to work your way).
-		local LStack	= {};
+		local Instr	= Instr;
+		local Const	= Const;
+		local Proto	= Proto;
+
+		local InstrPoint, Top	= 1, -1;
+		local Vararg, Varargsz	= {}, Select('#', ...) - 1;
+
 		local GStack	= {};
-
-		Top	= -1;
-
-		Stack	= setmetatable(LStack, {
+		local Stack		= setmetatable({}, {
 			__index		= GStack;
 			__newindex	= function(_, Key, Value)
 				if (Key > Top) and Value then
@@ -786,14 +261,520 @@ local function Wrap(Chunk, Env, Upvalues)
 			end;
 		});
 
+		local function COpcode(Enum, Inst) -- Opcodes re-implemented into a function for performance!
+			if (Enum == 0) then -- MOVE
+				Stack[Inst[1]]	= Stack[Inst[2]];
+			elseif (Enum == 1) then -- LOADK
+				Stack[Inst[1]]	= Const[Inst[2]];
+			elseif (Enum == 2) then -- LOADBOOL
+				Stack[Inst[1]]	= (Inst[2] ~= 0);
+
+				if (Inst[3] ~= 0) then
+					InstrPoint	= InstrPoint + 1;
+				end;
+			elseif (Enum == 3) then -- LOADNIL
+				local Stk	= Stack;
+
+				for Idx = Inst[1], Inst[2] do
+					Stk[Idx]	= nil;
+				end;
+			elseif (Enum == 4) then -- GETUPVAL
+				Stack[Inst[1]]	= Upvalues[Inst[2]];
+			elseif (Enum == 5) then -- GETGLOBAL
+				Stack[Inst[1]]	= Env[Const[Inst[2]]];
+			elseif (Enum == 6) then -- GETTABLE
+				local C		= Inst[3];
+				local Stk	= Stack;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]]	= Stk[Inst[2]][C];
+			elseif (Enum == 7) then -- SETGLOBAL
+				Env[Const[Inst[2]]]	= Stack[Inst[1]];
+			elseif (Enum == 8) then -- SETUPVAL
+				Upvalues[Inst[2]]	= Stack[Inst[1]];
+			elseif (Enum == 9) then -- SETTABLE
+				local B, C	= Inst[2], Inst[3];
+				local Stk	= Stack;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]][B]	= C;
+			elseif (Enum == 10) then -- NEWTABLE
+				Stack[Inst[1]]	= {};
+			elseif (Enum == 11) then -- SELF
+				local A		= Inst[1];
+				local B		= Inst[2];
+				local C		= Inst[3];
+				local Stk	= Stack;
+
+				B = Stk[B];
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[A + 1]	= B;
+				Stk[A]		= B[C];
+			elseif (Enum == 12) then -- ADD
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]]	= B + C;
+			elseif (Enum == 13) then -- SUB
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]]	= B - C;
+			elseif (Enum == 14) then -- MUL
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]]	= B * C;
+			elseif (Enum == 15) then -- DIV
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]]	= B / C;
+			elseif (Enum == 16) then -- MOD
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]]	= B % C;
+			elseif (Enum == 17) then -- POW
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				Stk[Inst[1]]	= B ^ C;
+			elseif (Enum == 18) then -- UNM
+				Stack[Inst[1]]	= -Stack[Inst[2]];
+			elseif (Enum == 19) then -- NOT
+				Stack[Inst[1]]	= (not Stack[Inst[2]]);
+			elseif (Enum == 20) then -- LEN
+				Stack[Inst[1]]	= #Stack[Inst[2]];
+			elseif (Enum == 21) then -- CONCAT
+				local Stk	= Stack;
+				local B		= Inst[2];
+				local K		= {Stack[B]};
+
+				for Idx = B + 1, Inst[3] do
+					K[#K + 1]	= Stk[Idx];
+				end;
+
+				Stack[Inst[1]]	= Concat(K);
+			elseif (Enum == 22) then -- JUMP
+				InstrPoint	= InstrPoint + Inst[2];
+			elseif (Enum == 23) then -- EQ
+				local A	= Inst[1] ~= 0;
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				if (B == C) ~= A then
+					InstrPoint	= InstrPoint + 1;
+				end;
+			elseif (Enum == 24) then -- LT
+				local A	= Inst[1] ~= 0;
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				if (B < C) ~= A then
+					InstrPoint	= InstrPoint + 1;
+				end;
+			elseif (Enum == 25) then -- LE
+				local A	= Inst[1] ~= 0;
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk, Con	= Stack, Const;
+
+				if (B > 255) then
+					B	= Const[B - 256];
+				else
+					B	= Stk[B];
+				end;
+
+				if (C > 255) then
+					C	= Const[C - 256];
+				else
+					C	= Stk[C];
+				end;
+
+				if (B <= C) ~= A then
+					InstrPoint	= InstrPoint + 1;
+				end;
+			elseif (Enum == 26) then -- TEST
+				if (not not Stack[Inst[1]]) == (Inst[3] == 0) then
+					InstrPoint	= InstrPoint + 1;
+				end;
+			elseif (Enum == 27) then -- TESTSET
+				local B	= Stack[Inst[2]];
+
+				if (not not B) == (Inst[3] == 0) then
+					InstrPoint	= InstrPoint;
+				else
+					Stack[Inst[1]] = B;
+				end;
+			elseif (Enum == 28) then -- CALL
+				local A	= Inst[1];
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk	= Stack;
+				local Args, Results;
+				local Limit, Loop;
+
+				Args	= {};
+
+				if (B ~= 1) then
+					if (B ~= 0) then
+						Limit = A + B - 1;
+					else
+						Limit = Top;
+					end;
+
+					Loop	= 0;
+
+					for Idx = A + 1, Limit do
+						Loop = Loop + 1;
+
+						Args[Loop] = Stk[Idx];
+					end;
+
+					Limit, Results = _Returns(Stk[A](unpack(Args, 1, Limit - A)));
+				else
+					Limit, Results = _Returns(Stk[A]());
+				end;
+
+				Top = A - 1;
+
+				if (C ~= 1) then
+					if (C ~= 0) then
+						Limit = A + C - 2;
+					else
+						Limit = Limit + A;
+					end;
+
+					Loop	= 0;
+
+					for Idx = A, Limit do
+						Loop = Loop + 1;
+
+						Stk[Idx] = Results[Loop];
+					end;
+				end;
+			elseif (Enum == 29) then -- TAILCALL
+				local A	= Inst[1];
+				local B	= Inst[2];
+				local C	= Inst[3];
+				local Stk	= Stack;
+				local Args, Results;
+				local Limit, Loop;
+
+				Args = {};
+
+				if (B ~= 1) then
+					if (B ~= 0) then
+						Limit = A + B - 1;
+					else
+						Limit = Top;
+					end
+
+					Loop = 0;
+
+					for Idx = A + 1, Limit do
+						Loop = Loop + 1;
+
+						Args[#Args + 1] = Stk[Idx];
+					end
+
+					Results = {Stk[A](unpack(Args, 1, Limit - A))};
+				else
+					Results = {Stk[A]()};
+				end;
+
+				return true, Results;
+			elseif (Enum == 30) then -- RETURN
+				local A	= Inst[1];
+				local B	= Inst[2];
+				local Stk	= Stack;
+				local Loop, Output;
+				local Limit;
+
+				if (B == 1) then
+					return true;
+				elseif (B == 0) then
+					Limit	= Top;
+				else
+					Limit	= A + B - 2;
+				end;
+
+				Output = {};
+
+				local Loop	= 0;
+
+				for Idx = A, Limit do
+					Loop	= Loop + 1;
+
+					Output[Loop] = Stk[Idx];
+				end;
+
+				return true, Output;
+			elseif (Enum == 31) then -- FORLOOP
+				local A		= Inst[1];
+				local Stk	= Stack;
+
+				local Step	= Stk[A + 2];
+				local Index	= Stk[A] + Step;
+
+				Stk[A]	= Index;
+
+				if (Step > 0) then
+					if Index <= Stk[A + 1] then
+						InstrPoint	= InstrPoint + Inst[2];
+
+						Stk[A + 3] = Index;
+					end;
+				else
+					if Index >= Stk[A + 1] then
+						InstrPoint	= InstrPoint + Inst[2];
+
+						Stk[A + 3] = Index;
+					end
+				end
+			elseif (Enum == 32) then -- FORPREP
+				local A		= Inst[1];
+				local Stk	= Stack;
+
+				Stk[A]	= Stk[A] - Stk[A + 2];
+
+				InstrPoint	= InstrPoint + Inst[2];
+			elseif (Enum == 33) then -- TFORLOOP
+				local A		= Inst[1];
+				local B		= Inst[2];
+				local C		= Inst[3];
+				local Stk	= Stack;
+
+				local Offset	= A + 2;
+				local Result	= {Stk[A](Stk[A + 1], Stk[A + 2])};
+
+				for Idx = 1, C do
+					Stack[Offset + Idx] = Result[Idx];
+				end;
+
+				if (Stk[A + 3] ~= nil) then
+					Stk[A + 2]	= Stk[A + 3];
+				else
+					InstrPoint	= InstrPoint + 1;
+				end;
+			elseif (Enum == 34) then -- SETLIST
+				local A		= Inst[1];
+				local B		= Inst[2];
+				local C		= Inst[3];
+				local Stk	= Stack;
+
+				if (C == 0) then -- Seriously.
+					error('List surpasses 25550 indexes, please consider your life choices.');
+				else
+					local Offset	= (C - 1) * 50;
+					local T			= Stk[A]; -- Assuming T is the newly created table.
+
+					if (B == 0) then
+						B	= Top;
+					end;
+
+					for Idx = 1, B do
+						T[Offset + Idx] = Stk[A + Idx];
+					end;
+				end;
+			elseif (Enum == 35) then -- CLOSE
+				-- No implementation needed for a mostly C specific function(?).
+			elseif (Enum == 36) then -- CLOSURE
+				local Proto	= Proto[Inst[2]];
+				local Instr = Instr;
+				local Stk	= Stack;
+
+				local Indexes	= {};
+				local NewUvals	= setmetatable({}, {
+						__index = function(_, Key)
+							local Val	= Indexes[Key];
+
+							return Val[1][Val[2]];
+						end,
+						__newindex = function(_, Key, Value)
+							local Val	= Indexes[Key];
+
+							Val[1][Val[2]]	= Value;
+						end;
+					}
+				);
+
+				for Idx = 1, Proto.Upvals do
+					local Mvm	= Instr[InstrPoint];
+
+					if (Mvm.Enum == 0) then -- MOVE
+						Indexes[Idx - 1] = {Stk, Mvm[2]};
+					elseif (Mvm.Enum == 4) then -- GETUPVAL
+						Indexes[Idx - 1] = {Upvalues, Mvm[2]};
+					end;
+
+					InstrPoint	= InstrPoint + 1;
+				end;
+
+				Stk[Inst[1]]	= Wrap(Proto, Env, NewUvals);
+			elseif (Enum == 37) then -- VARARG
+				local A	= Inst[1];
+				local B	= Inst[2];
+				local Stk, Vararg	= Stack, Vararg;
+
+				for Idx = A, A + (B > 0 and B - 1 or Varargsz) do
+					Stk[Idx]	= Vararg[Idx - A];
+				end;
+			end;
+		end;
+
+		local function Loop()
+			local Instr	= Instr;
+			local Inst, A, B;
+
+			while true do
+				Inst	= Instr[InstrPoint];
+
+--				if (not Inst) then -- Ideally there should be no need for this, but if anything comes up contact me.
+--					return B;
+--				end;
+
+				InstrPoint	= InstrPoint + 1;
+
+				A, B	= COpcode(Inst.Enum, Inst);
+
+				if A then
+					return B;
+				end;
+			end;
+		end;
+
 		local Args	= {...};
 
-		Vararg		= {};
-		Varargsz	= Select('#', ...) - 1;
-		InstrPoint	= 1;
-
 		for Idx = 0, Varargsz do
-			LStack[Idx] = Args[Idx + 1];
+			Stack[Idx] = Args[Idx + 1];
 			Vararg[Idx] = Args[Idx + 1];
 		end;
 
@@ -806,7 +787,7 @@ local function Wrap(Chunk, Env, Upvalues)
 
 			return;
 		else
-			OnError(B);
+			OnError(B, InstrPoint - 1);
 		end;
 	end;
 end;
