@@ -537,7 +537,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local B	= Stack[Inst[2]];
 
 					if (not not B) == (Inst[3] == 0) then
-						InstrPoint	= InstrPoint;
+						InstrPoint	= InstrPoint + 1;
 					else
 						Stack[Inst[1]] = B;
 					end;
