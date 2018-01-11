@@ -29,15 +29,16 @@ local Opcode	= { -- Opcode types.
 		* A more readable format for easier editing of the code
 		* No fix/addition to SETLIST, as 25550 items in initializing a list isn't realistic
 		* Tailcalls, threading and stack-sharing fixed
+		* CLOSE opcode implemented
 --]]
 
 --[[
-	TODO LIST:
-		* Implement CLOSE (maybe? Doesn't seem to need one in regular Lua)
-		* Maybe some more optimizations
+	TODO:
+		* Implement extended SETLIST
+		* Optimize further, for the cause
+		* Maybe an expansion for it to work with different settings
 --]]
 
--- 1 BYTE = 8 BITS; 4 byte instructions = 32 bit instructions.
 local function gBit(Bit, Start, End) -- No tail-calls, yay.
 	if End then -- Thanks to cntkillme for giving input on this shorter, better approach.
 		local Res	= (Bit / 2 ^ (Start - 1)) % 2 ^ ((End - 1) - (Start - 1) + 1);
@@ -192,7 +193,7 @@ local function GetMeaning(ByteString)
 		return Chunk; -- Finished chunk.
 	end;
 
-	do
+	do -- Most of this chunk I was too lazy to reformat or change
 		assert(gString(4) == "\27Lua", "Lua bytecode expected.");
 		assert(gBits8() == 0x51, "Only Lua 5.1 is supported.");
 
@@ -207,7 +208,7 @@ local function GetMeaning(ByteString)
 		elseif (IntSize == 8) then
 			gInt	= gBits64;
 		else
-			error("Unsupported bytecode target platform", 2);
+			error('Integer size not supported', 2);
 		end;
 
 		if (Sizet == 4) then
@@ -215,7 +216,7 @@ local function GetMeaning(ByteString)
 		elseif (Sizet == 8) then
 			gSizet	= gBits64;
 		else
-			error("Unsupported bytecode target platform", 2);
+			error('Sizet size not supported', 2);
 		end;
 
 		assert(gString(3) == "\4\8\0", "Unsupported bytecode target platform");
@@ -242,14 +243,16 @@ local function Wrap(Chunk, Env, Upvalues)
 	end;
 
 	return function(...) -- Returned function to run bytecode chunk (Don't be stupid, you can't setfenv this to work your way).
-		local Instr	= Instr;
-		local Const	= Const;
-		local Proto	= Proto;
+		local Upvalues	= Upvalues;
+		local Instr		= Instr;
+		local Const		= Const;
+		local Proto		= Proto;
 
 		local InstrPoint, Top	= 1, -1;
 		local Vararg, Varargsz	= {}, Select('#', ...) - 1;
 
 		local GStack	= {};
+		local Lupvals	= {};
 		local Stack		= setmetatable({}, {
 			__index		= GStack;
 			__newindex	= function(_, Key, Value)
@@ -713,40 +716,63 @@ local function Wrap(Chunk, Env, Upvalues)
 						end;
 					end;
 				elseif (Enum == 35) then -- CLOSE
-					-- No implementation needed for a mostly C specific function(?).
+					local A		= Inst[1];
+					local Cls	= {}; -- Slight doubts on any issues this may cause
+
+					for Idx = 1, #Lupvals do
+						local List = Lupvals[Idx];
+
+						for Idz = 0, #List do
+							local Upv	= List[Idz];
+							local Stk	= Upv[1];
+							local Pos	= Upv[2];
+
+							if (Stk == Stack) and (Pos >= A) then
+								Cls[Pos]	= Stk[Pos];
+								Upv[1]		= Cls; -- @memcorrupt credit me for the spoonfeed
+							end;
+						end;
+					end;
 				elseif (Enum == 36) then -- CLOSURE
 					local Proto	= Proto[Inst[2]];
 					local Instr = Instr;
 					local Stk	= Stack;
 
-					local Indexes	= {};
-					local NewUvals	= setmetatable({}, {
-							__index = function(_, Key)
-								local Val	= Indexes[Key];
+					local Indexes;
+					local NewUvals;
 
-								return Val[1][Val[2]];
-							end,
-							__newindex = function(_, Key, Value)
-								local Val	= Indexes[Key];
+					if (Proto.Upvals ~= 0) then
+						Indexes		= {};
+						NewUvals	= setmetatable({}, {
+								__index = function(_, Key)
+									local Val	= Indexes[Key];
 
-								Val[1][Val[2]]	= Value;
+									return Val[1][Val[2]];
+								end,
+								__newindex = function(_, Key, Value)
+									local Val	= Indexes[Key];
+
+									Val[1][Val[2]]	= Value;
+								end;
+							}
+						);
+
+						for Idx = 1, Proto.Upvals do
+							local Mvm	= Instr[InstrPoint];
+
+							if (Mvm.Enum == 0) then -- MOVE
+								Indexes[Idx - 1] = {Stk, Mvm[2]};
+							elseif (Mvm.Enum == 4) then -- GETUPVAL
+								Indexes[Idx - 1] = {Upvalues, Mvm[2]};
 							end;
-						}
-					);
 
-					for Idx = 1, Proto.Upvals do
-						local Mvm	= Instr[InstrPoint];
-
-						if (Mvm.Enum == 0) then -- MOVE
-							Indexes[Idx - 1] = {Stk, Mvm[2]};
-						elseif (Mvm.Enum == 4) then -- GETUPVAL
-							Indexes[Idx - 1] = {Upvalues, Mvm[2]};
+							InstrPoint	= InstrPoint + 1;
 						end;
 
-						InstrPoint	= InstrPoint + 1;
+						Lupvals[#Lupvals + 1]	= Indexes;
 					end;
 
-					Stk[Inst[1]]	= Wrap(Proto, Env, NewUvals);
+					Stk[Inst[1]]			= Wrap(Proto, Env, NewUvals);
 				elseif (Enum == 37) then -- VARARG
 					local A	= Inst[1];
 					local B	= Inst[2];
@@ -766,7 +792,7 @@ local function Wrap(Chunk, Env, Upvalues)
 			Vararg[Idx] = Args[Idx + 1];
 		end;
 
-		local A, B		= pcall(Loop); -- What *would* be the difference between routining and pcalling this?
+		local A, B		= pcall(Loop); -- Pcalling to allow yielding
 
 		if A then -- We're always expecting this to come out true (because errorless code)
 			if B then -- So I flipped the conditions.
@@ -775,7 +801,7 @@ local function Wrap(Chunk, Env, Upvalues)
 
 			return;
 		else
-			OnError(B, InstrPoint - 1);
+			OnError(B, InstrPoint - 1); -- Didn't get time to test the `-1` honestly, but I assume it works properly
 		end;
 	end;
 end;
