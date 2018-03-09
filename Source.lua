@@ -18,25 +18,18 @@ local Opcode	= { -- Opcode types.
 -- rlbi author -> Rerumu
 
 --[[
-	Consider this a direct upgrade to the beauty that stravant (and some other people..? Dunno the details) left behind.
-	This "new" version includes:
-		* Almost complete rework (most things reworked from scratch)
-		* Visible performance improvements (wayyyy faster)
-		* Upvalue error fixes
-		* C Stack overflow fixes (most cases anyways)
-		* Fixed missing "return" errors
-		* Solved 0 const being treated as "1.1125369292536e-308"
-		* A more readable format for easier editing of the code
-		* No fix/addition to SETLIST, as 25550 items in initializing a list isn't realistic
-		* Tailcalls, threading and stack-sharing fixed
-		* CLOSE opcode implemented
-		* Extended SETLIST implemented (hopefully not broken?)
---]]
-
---[[
-	TODO:
-		* Optimize further, for the cause
-		* Maybe an expansion for it to work with different settings
+	Features;
+		* Almost complete rework/rewrite
+		* Fast and performant
+		* Fixes to upvalues
+		* C Stack overflow fixes in opcodes
+		* Fixed missing/broken returns
+		* Numeric constant 0 is properly handled
+		* Formatted in a more readable manner
+		* Tailcalls and stack issues have been fixed
+		* CLOSE implemented
+		* SETLIST (extended) implemented
+		* VARARG fixes
 --]]
 
 local function gBit(Bit, Start, End) -- No tail-calls, yay.
@@ -711,7 +704,7 @@ local function Wrap(Chunk, Env, Upvalues)
 						InstrPoint	= InstrPoint + 1;
 						C			= Instr[InstrPoint]; -- This implementation was ambiguous! Will eventually re-test.
 					end;
-						
+
 					local Offset	= (C - 1) * 50;
 					local T			= Stk[A]; -- Assuming T is the newly created table.
 
@@ -796,7 +789,10 @@ local function Wrap(Chunk, Env, Upvalues)
 
 		for Idx = 0, Varargsz do
 			Stack[Idx] = Args[Idx + 1];
-			Vararg[Idx] = Args[Idx + 1];
+
+			if (Idx >= Chunk.Args) then
+				Vararg[Idx - Chunk.Args] = Args[Idx + 1];
+			end;
 		end;
 
 		local A, B		= pcall(Loop); -- Pcalling to allow yielding
