@@ -1,6 +1,5 @@
-local Concat	= table.concat;
 local Select	= select;
-local _Byte		= string.byte;
+local Byte		= string.byte;
 local Sub		= string.sub;
 local Opcode	= { -- Opcode types.
 	'ABC',	'ABx',	'ABC',	'ABC';
@@ -16,21 +15,14 @@ local Opcode	= { -- Opcode types.
 };
 
 -- rlbi author -> Rerumu
+-- special thanks;
+--	@cntkillme for providing faster bit extraction
+--	@Eternal for being #1 bug finder and providing better float decoder
+--	@stravant for contributing to the original project this is derived from
 
---[[
-	Features;
-		* Almost complete rework/rewrite
-		* Fast and performant
-		* Fixes to upvalues
-		* C Stack overflow fixes in opcodes
-		* Fixed missing/broken returns
-		* Numeric constant 0 is properly handled
-		* Formatted in a more readable manner
-		* Tailcalls and stack issues have been fixed
-		* CLOSE implemented
-		* SETLIST (extended) implemented
-		* VARARG fixes
---]]
+-- rerubi is an upgrade to the original Lua VM in Lua
+-- the prime goal of rerubi is to be the fastest:tm: alternative
+-- to a Lua in Lua bytecode execution
 
 local function gBit(Bit, Start, End) -- No tail-calls, yay.
 	if End then -- Thanks to cntkillme for giving input on this shorter, better approach.
@@ -54,7 +46,7 @@ local function GetMeaning(ByteString)
 	local gInt;
 
 	local function gBits8() -- Get the next byte in the stream.
-		local F	= _Byte(ByteString, Pos, Pos);
+		local F	= Byte(ByteString, Pos, Pos);
 
 		Pos	= Pos + 1;
 
@@ -62,7 +54,7 @@ local function GetMeaning(ByteString)
 	end;
 
 	local function gBits32()
-		local W, X, Y, Z	= _Byte(ByteString, Pos, Pos + 3);
+		local W, X, Y, Z	= Byte(ByteString, Pos, Pos + 3);
 
 		Pos	= Pos + 4;
 
@@ -74,13 +66,33 @@ local function GetMeaning(ByteString)
 	end;
 
 	local function gFloat()
-		local A, B	= gBits32(), gBits32();
+		-- thanks @Eternal for giving me this so I could mangle it in here and have it work
+		local Left = gBits32();
+		local Right = gBits32();
+		local IsNormal = 1
+		local Mantissa = (gBit(Right, 1, 20) * (2 ^ 32))
+						+ Left;
 
-		if ((A + B) == 0) then
-			return 0; -- Float 0 tends to be very messy, so this is a temp fix until I figure out what's up.
-		else
-			return (-2 * gBit(B, 32) + 1) * (2 ^ (gBit(B, 21, 31) - 1023)) * ((gBit(B, 1, 20) * (2^32) + A) / (2 ^ 52) + 1);
-		end;
+		local Exponent = gBit(Right, 21, 31);
+		local Sign = ((-1) ^ gBit(Right, 32));
+
+		if (Exponent == 0) then
+			if (Mantissa == 0) then
+				return Sign * 0 -- +-0
+			else
+				Exponent = 1
+				IsNormal = 0
+			end
+		elseif (Exponent == 2047) then
+			if (Mantissa == 0) then
+				return Sign * (1 / 0) -- +-Inf
+			else
+				return Sign * (0 / 0) -- +-Q/Nan
+			end
+		end
+
+		-- sign * 2**e-1023 * isNormal.mantissa
+		return math.ldexp(Sign, Exponent - 1023) * (IsNormal + (Mantissa / (2 ^ 52)))
 	end;
 
 	local function gString(Len)
@@ -178,13 +190,13 @@ local function GetMeaning(ByteString)
 				Lines[Idx]	= gBits32();
 			end;
 
-			for Idx = 1, gInt() do -- Locals in stack.
+			for _ = 1, gInt() do -- Locals in stack.
 				gString(); -- Name of local.
 				gBits32(); -- Starting point.
 				gBits32(); -- End point.
 			end;
 
-			for Idx = 1, gInt() do -- Upvalues.
+			for _ = 1, gInt() do -- Upvalues.
 				gString(); -- Name of upvalue.
 			end;
 		end;
@@ -236,17 +248,14 @@ local function Wrap(Chunk, Env, Upvalues)
 	local function OnError(Err, Position) -- Handle your errors in whatever way.
 		local Name	= Chunk.Name or 'Code';
 		local Line	= Chunk.Lines[Position] or '?';
-		local Err	= Err:match'^.+:%s*(.+)' or Err;
+
+		Err	= tostring(Err):match'^.+:%s*(.+)' or Err;
 
 		error(string.format('%s (%s): %s', Name, Line, Err), 0);
 	end;
 
-	return function(...) -- Returned function to run bytecode chunk (Don't be stupid, you can't setfenv this to work your way).
-		local Upvalues	= Upvalues;
-		local Instr		= Instr;
-		local Const		= Const;
-		local Proto		= Proto;
-
+	return function(...)
+		-- Returned function to run bytecode chunk (Don't be stupid, you can't setfenv this to work your way).
 		local InstrPoint, Top	= 1, -1;
 		local Vararg, Varargsz	= {}, Select('#', ...) - 1;
 
@@ -255,7 +264,7 @@ local function Wrap(Chunk, Env, Upvalues)
 		local Stack		= setmetatable({}, {
 			__index		= GStack;
 			__newindex	= function(_, Key, Value)
-				if (Key > Top) and Value then
+				if (Key > Top) then
 					Top	= Key;
 				end;
 
@@ -264,8 +273,7 @@ local function Wrap(Chunk, Env, Upvalues)
 		});
 
 		local function Loop()
-			local Instr	= Instr;
-			local Inst, Enum, A, B;
+			local Inst, Enum;
 
 			while true do
 				Inst		= Instr[InstrPoint];
@@ -345,7 +353,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 12) then -- ADD
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -363,7 +371,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 13) then -- SUB
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -381,7 +389,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 14) then -- MUL
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -399,7 +407,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 15) then -- DIV
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -417,7 +425,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 16) then -- MOD
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -435,7 +443,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 17) then -- POW
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -459,20 +467,20 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 21) then -- CONCAT
 					local Stk	= Stack;
 					local B		= Inst[2];
-					local K		= {Stack[B]};
+					local K 	= Stk[B];
 
 					for Idx = B + 1, Inst[3] do
-						K[#K + 1]	= Stk[Idx];
+						K = K .. Stk[Idx];
 					end;
 
-					Stack[Inst[1]]	= Concat(K);
-				elseif (Enum == 22) then -- JUMP
+					Stack[Inst[1]]	= K;
+				elseif (Enum == 22) then -- JMP
 					InstrPoint	= InstrPoint + Inst[2];
 				elseif (Enum == 23) then -- EQ
 					local A	= Inst[1] ~= 0;
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -493,7 +501,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local A	= Inst[1] ~= 0;
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -514,7 +522,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local A	= Inst[1] ~= 0;
 					local B	= Inst[2];
 					local C	= Inst[3];
-					local Stk, Con	= Stack, Const;
+					local Stk = Stack;
 
 					if (B > 255) then
 						B	= Const[B - 256];
@@ -579,7 +587,7 @@ local function Wrap(Chunk, Env, Upvalues)
 						if (C ~= 0) then
 							Limit = A + C - 2;
 						else
-							Limit = Limit + A;
+							Limit = Limit + A - 1;
 						end;
 
 						Loop	= 0;
@@ -593,10 +601,10 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 29) then -- TAILCALL
 					local A	= Inst[1];
 					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk	= Stack;
 					local Args, Results;
 					local Limit, Loop;
+					local Rets = 0;
 
 					Args = {};
 
@@ -620,7 +628,13 @@ local function Wrap(Chunk, Env, Upvalues)
 						Results = {Stk[A]()};
 					end;
 
-					return Results;
+					for Index in next, Results do -- get return count
+						if (Index > Rets) then
+							Rets = Index;
+						end;
+					end;
+
+					return Results, Rets;
 				elseif (Enum == 30) then -- RETURN
 					local A	= Inst[1];
 					local B	= Inst[2];
@@ -637,8 +651,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					end;
 
 					Output = {};
-
-					local Loop	= 0;
+					Loop = 0;
 
 					for Idx = A, Limit do
 						Loop	= Loop + 1;
@@ -646,7 +659,7 @@ local function Wrap(Chunk, Env, Upvalues)
 						Output[Loop] = Stk[Idx];
 					end;
 
-					return Output;
+					return Output, Loop;
 				elseif (Enum == 31) then -- FORLOOP
 					local A		= Inst[1];
 					local Stk	= Stack;
@@ -673,12 +686,16 @@ local function Wrap(Chunk, Env, Upvalues)
 					local A		= Inst[1];
 					local Stk	= Stack;
 
+					-- As per mirroring the real vm
+					Stk[A] = assert(tonumber(Stk[A]), '`for` initial value must be a number');
+					Stk[A + 1] = assert(tonumber(Stk[A + 1]), '`for` limit must be a number');
+					Stk[A + 2] = assert(tonumber(Stk[A + 2]), '`for` step must be a number');
+
 					Stk[A]	= Stk[A] - Stk[A + 2];
 
 					InstrPoint	= InstrPoint + Inst[2];
 				elseif (Enum == 33) then -- TFORLOOP
 					local A		= Inst[1];
-					local B		= Inst[2];
 					local C		= Inst[3];
 					local Stk	= Stack;
 
@@ -734,14 +751,13 @@ local function Wrap(Chunk, Env, Upvalues)
 						end;
 					end;
 				elseif (Enum == 36) then -- CLOSURE
-					local Proto	= Proto[Inst[2]];
-					local Instr = Instr;
+					local NewProto	= Proto[Inst[2]];
 					local Stk	= Stack;
 
 					local Indexes;
 					local NewUvals;
 
-					if (Proto.Upvals ~= 0) then
+					if (NewProto.Upvals ~= 0) then
 						Indexes		= {};
 						NewUvals	= setmetatable({}, {
 								__index = function(_, Key)
@@ -757,7 +773,7 @@ local function Wrap(Chunk, Env, Upvalues)
 							}
 						);
 
-						for Idx = 1, Proto.Upvals do
+						for Idx = 1, NewProto.Upvals do
 							local Mvm	= Instr[InstrPoint];
 
 							if (Mvm.Enum == 0) then -- MOVE
@@ -772,14 +788,16 @@ local function Wrap(Chunk, Env, Upvalues)
 						Lupvals[#Lupvals + 1]	= Indexes;
 					end;
 
-					Stk[Inst[1]]			= Wrap(Proto, Env, NewUvals);
+					Stk[Inst[1]]			= Wrap(NewProto, Env, NewUvals);
 				elseif (Enum == 37) then -- VARARG
 					local A	= Inst[1];
 					local B	= Inst[2];
-					local Stk, Vararg	= Stack, Vararg;
+					local Stk, Vars	= Stack, Vararg;
+
+					Top = A - 1;
 
 					for Idx = A, A + (B > 0 and B - 1 or Varargsz) do
-						Stk[Idx]	= Vararg[Idx - A];
+						Stk[Idx]	= Vars[Idx - A];
 					end;
 				end;
 			end;
@@ -788,18 +806,18 @@ local function Wrap(Chunk, Env, Upvalues)
 		local Args	= {...};
 
 		for Idx = 0, Varargsz do
-			Stack[Idx] = Args[Idx + 1];
-
 			if (Idx >= Chunk.Args) then
 				Vararg[Idx - Chunk.Args] = Args[Idx + 1];
+			else
+				Stack[Idx] = Args[Idx + 1];
 			end;
 		end;
 
-		local A, B		= pcall(Loop); -- Pcalling to allow yielding
+		local A, B, C	= pcall(Loop); -- Pcalling to allow yielding
 
 		if A then -- We're always expecting this to come out true (because errorless code)
-			if B then -- So I flipped the conditions.
-				return unpack(B);
+			if B and (C > 0) then -- So I flipped the conditions.
+				return unpack(B, 1, C);
 			end;
 
 			return;
