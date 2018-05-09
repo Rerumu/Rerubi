@@ -7,3 +7,13 @@ Special thanks to [cntkillme](https://www.roblox.com/users/294568/profile) for t
 To-do list and details in the Source file.
 
 I'll be working out most if not all the to-dos whenever I get around to working more on this.
+
+Last update, the following issues were solved:
+* https://github.com/Rerumu/Rerubi/issues/9
+* https://github.com/Rerumu/Rerubi/issues/8
+* https://github.com/Rerumu/Rerubi/issues/6
+* https://github.com/Rerumu/Rerubi/issues/5
+* https://github.com/Rerumu/Rerubi/issues/4
+
+And a couple better algos implemented, along with the removal of the in-script changes.
+Shout-out to Eternal for sniffing out the bugs for me.
