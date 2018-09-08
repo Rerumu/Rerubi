@@ -141,24 +141,19 @@ local function GetMeaning(ByteString)
 			local Data	= gBits32();
 			local Opco	= gBit(Data, 1, 6);
 			local Type	= Opcode[Opco + 1];
-			local Inst;
+			local Inst	= {
+				Value	= Data;
+				Enum	= Opco;
+				gBit(Data, 7, 14); -- Register A.
+			};
 
-			if Type then
-				Inst	= {
-					Enum	= Opco;
-					gBit(Data, 7, 14); -- Register A.
-				};
-
-				if (Type == 'ABC') then -- Most common, basic instruction type.
-					Inst[2]	= gBit(Data, 24, 32);
-					Inst[3]	= gBit(Data, 15, 23);
-				elseif (Type == 'ABx') then
-					Inst[2]	= gBit(Data, 15, 32);
-				elseif (Type == 'AsBx') then
-					Inst[2]	= gBit(Data, 15, 32) - 131071;
-				end;
-			else
-				Inst	= Data; -- Extended SETLIST
+			if (Type == 'ABC') then -- Most common, basic instruction type.
+				Inst[2]	= gBit(Data, 24, 32);
+				Inst[3]	= gBit(Data, 15, 23);
+			elseif (Type == 'ABx') then
+				Inst[2]	= gBit(Data, 15, 32);
+			elseif (Type == 'AsBx') then
+				Inst[2]	= gBit(Data, 15, 32) - 131071;
 			end;
 
 			Instr[Idx]	= Inst;
@@ -249,9 +244,7 @@ local function Wrap(Chunk, Env, Upvalues)
 		local Name	= Chunk.Name or 'Code';
 		local Line	= Chunk.Lines[Position] or '?';
 
-		Err	= tostring(Err):match'^.+:%s*(.+)' or Err;
-
-		error(string.format('%s (%s): %s', Name, Line, Err), 0);
+		error(string.format('%s:%s: %s', Name, Line, tostring(Err)), 0);
 	end;
 
 	return function(...)
@@ -557,7 +550,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local C	= Inst[3];
 					local Stk	= Stack;
 					local Args, Results;
-					local Limit, Loop;
+					local Limit, Edx;
 
 					Args	= {};
 
@@ -568,12 +561,12 @@ local function Wrap(Chunk, Env, Upvalues)
 							Limit = Top;
 						end;
 
-						Loop	= 0;
+						Edx	= 0;
 
 						for Idx = A + 1, Limit do
-							Loop = Loop + 1;
+							Edx = Edx + 1;
 
-							Args[Loop] = Stk[Idx];
+							Args[Edx] = Stk[Idx];
 						end;
 
 						Limit, Results = _Returns(Stk[A](unpack(Args, 1, Limit - A)));
@@ -590,12 +583,12 @@ local function Wrap(Chunk, Env, Upvalues)
 							Limit = Limit + A - 1;
 						end;
 
-						Loop	= 0;
+						Edx	= 0;
 
 						for Idx = A, Limit do
-							Loop = Loop + 1;
+							Edx = Edx + 1;
 
-							Stk[Idx] = Results[Loop];
+							Stk[Idx] = Results[Edx];
 						end;
 					end;
 				elseif (Enum == 29) then -- TAILCALL
@@ -603,7 +596,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local B	= Inst[2];
 					local Stk	= Stack;
 					local Args, Results;
-					local Limit, Loop;
+					local Limit;
 					local Rets = 0;
 
 					Args = {};
@@ -615,11 +608,7 @@ local function Wrap(Chunk, Env, Upvalues)
 							Limit = Top;
 						end
 
-						Loop = 0;
-
 						for Idx = A + 1, Limit do
-							Loop = Loop + 1;
-
 							Args[#Args + 1] = Stk[Idx];
 						end
 
@@ -639,7 +628,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local A	= Inst[1];
 					local B	= Inst[2];
 					local Stk	= Stack;
-					local Loop, Output;
+					local Edx, Output;
 					local Limit;
 
 					if (B == 1) then
@@ -651,15 +640,15 @@ local function Wrap(Chunk, Env, Upvalues)
 					end;
 
 					Output = {};
-					Loop = 0;
+					Edx = 0;
 
 					for Idx = A, Limit do
-						Loop	= Loop + 1;
+						Edx	= Edx + 1;
 
-						Output[Loop] = Stk[Idx];
+						Output[Edx] = Stk[Idx];
 					end;
 
-					return Output, Loop;
+					return Output, Edx;
 				elseif (Enum == 31) then -- FORLOOP
 					local A		= Inst[1];
 					local Stk	= Stack;
@@ -719,14 +708,14 @@ local function Wrap(Chunk, Env, Upvalues)
 
 					if (C == 0) then
 						InstrPoint	= InstrPoint + 1;
-						C			= Instr[InstrPoint]; -- This implementation was ambiguous! Will eventually re-test.
+						C			= Instr[InstrPoint].Value;
 					end;
 
 					local Offset	= (C - 1) * 50;
 					local T			= Stk[A]; -- Assuming T is the newly created table.
 
 					if (B == 0) then
-						B	= Top;
+						B	= Top - A;
 					end;
 
 					for Idx = 1, B do
