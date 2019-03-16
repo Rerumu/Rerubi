@@ -175,15 +175,25 @@ local function GetMeaning(ByteString)
 				Inst[2]	= gBit(Data, 15, 32) - 131071;
 			end;
 
-			if Mode.b == 'OpArgK' then
-				Inst[3] = Inst[3] or false -- Simply to guarantee that Inst[4] is inserted in the array part
-				Inst[4] = Inst[2] >= 256 and Inst[2] - 256 
-			end 
+			-- Precompute data for some instructions
+			do 
+				-- TEST and TESTSET 
+				if Opco == 26 or Opco == 27 then 
+					Inst[3] = Inst[3] ~= 0
+				end
 
-			if Mode.c == 'OpArgK' then
-				Inst[4] = Inst[4] or false -- Simply to guarantee that Inst[5] is inserted in the array part
-				Inst[5] = Inst[3] >= 256 and Inst[3] - 256
-			end 
+				-- Anything that looks at a constant using B
+				if Mode.b == 'OpArgK' then
+					Inst[3] = Inst[3] or false -- Simply to guarantee that Inst[4] is inserted in the array part
+					Inst[4] = Inst[2] >= 256 and Inst[2] - 256 
+				end 
+
+				-- Anything that looks at a constant using C
+				if Mode.c == 'OpArgK' then
+					Inst[4] = Inst[4] or false -- Simply to guarantee that Inst[5] is inserted in the array part
+					Inst[5] = Inst[3] >= 256 and Inst[3] - 256
+				end 
+			end
 
 			Instr[Idx]	= Inst;
 		end;
@@ -394,6 +404,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local A	= Inst[1] ~= 0;
 					local B = Const[Inst[4]] or Stk[Inst[2]];
 					local C = Const[Inst[5]] or Stk[Inst[3]];
+					
 					if (B == C) ~= A then
 						InstrPoint	= InstrPoint + 1;
 					end;
@@ -402,6 +413,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					local A	= Inst[1] ~= 0;
 					local B = Const[Inst[4]] or Stk[Inst[2]];
 					local C = Const[Inst[5]] or Stk[Inst[3]];
+					
 					if (B < C) ~= A then
 						InstrPoint	= InstrPoint + 1;
 					end;
@@ -415,9 +427,14 @@ local function Wrap(Chunk, Env, Upvalues)
 						InstrPoint	= InstrPoint + 1;
 					end;
 				elseif (Enum == 26) then -- TEST
-					if (not not Stack[Inst[1]]) == (Inst[3] == 0) then
-						InstrPoint	= InstrPoint + 1;
-					end;
+				    if Inst[3] then 
+				      if Inst[2] then
+				        InstrPoint = InstrPoint + 1 
+				      end
+				    elseif Inst[2] then
+				    else 
+				      InstrPoint = InstrPoint + 1
+				    end
 				elseif (Enum == 27) then -- TESTSET
 					local B	= Stack[Inst[2]];
 
