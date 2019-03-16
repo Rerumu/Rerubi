@@ -179,19 +179,24 @@ local function GetMeaning(ByteString)
 			do 
 				-- TEST and TESTSET 
 				if Opco == 26 or Opco == 27 then 
-					Inst[3] = Inst[3] ~= 0
+					Inst[3] = Inst[3] ~= 0;
 				end
+
+				-- EQ, LT, LE
+				if 23 >= Opco and Opco <= 25 then 
+					Inst[1] = Inst[1] ~= 0;
+				end 
 
 				-- Anything that looks at a constant using B
 				if Mode.b == 'OpArgK' then
-					Inst[3] = Inst[3] or false -- Simply to guarantee that Inst[4] is inserted in the array part
-					Inst[4] = Inst[2] >= 256 and Inst[2] - 256 
+					Inst[3] = Inst[3] or false; -- Simply to guarantee that Inst[4] is inserted in the array part
+					Inst[4] = Inst[2] >= 256 and Inst[2] - 256;
 				end 
 
 				-- Anything that looks at a constant using C
 				if Mode.c == 'OpArgK' then
 					Inst[4] = Inst[4] or false -- Simply to guarantee that Inst[5] is inserted in the array part
-					Inst[5] = Inst[3] >= 256 and Inst[3] - 256
+					Inst[5] = Inst[3] >= 256 and Inst[3] - 256;
 				end 
 			end
 
@@ -401,7 +406,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					InstrPoint	= InstrPoint + Inst[2];
 				elseif (Enum == 23) then -- EQ
 					local Stk = Stack;
-					local A	= Inst[1] ~= 0;
+					local A	= Inst[1];
 					local B = Const[Inst[4]] or Stk[Inst[2]];
 					local C = Const[Inst[5]] or Stk[Inst[3]];
 					
@@ -410,7 +415,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					end;
 				elseif (Enum == 24) then -- LT
 					local Stk = Stack;
-					local A	= Inst[1] ~= 0;
+					local A	= Inst[1];
 					local B = Const[Inst[4]] or Stk[Inst[2]];
 					local C = Const[Inst[5]] or Stk[Inst[3]];
 					
@@ -419,7 +424,7 @@ local function Wrap(Chunk, Env, Upvalues)
 					end;
 				elseif (Enum == 25) then -- LE
 					local Stk = Stack;
-					local A	= Inst[1] ~= 0;
+					local A	= Inst[1];
 					local B = Const[Inst[4]] or Stk[Inst[2]];
 					local C = Const[Inst[5]] or Stk[Inst[3]];
 
@@ -428,21 +433,27 @@ local function Wrap(Chunk, Env, Upvalues)
 					end;
 				elseif (Enum == 26) then -- TEST
 				    if Inst[3] then 
-				      if Inst[2] then
-				        InstrPoint = InstrPoint + 1 
+				      if Stack[Inst[1]] then
+				        InstrPoint = InstrPoint + 1;
 				      end
-				    elseif Inst[2] then
+				    elseif Stack[Inst[1]] then
 				    else 
-				      InstrPoint = InstrPoint + 1
+				      InstrPoint = InstrPoint + 1;
 				    end
 				elseif (Enum == 27) then -- TESTSET
-					local B	= Stack[Inst[2]];
+					local B = Stack[Inst[2]];
 
-					if (not not B) == (Inst[3] == 0) then
-						InstrPoint	= InstrPoint + 1;
-					else
-						Stack[Inst[1]] = B;
-					end;
+				    if Inst[3] then 
+						if B then
+					    	InstrPoint = InstrPoint + 1;
+						else 
+					    	Stack[Inst[1]] = B
+						end
+				    elseif B then
+				    	Stack[Inst[1]] = B
+				    else 
+				    	InstrPoint = InstrPoint + 1;
+				    end
 				elseif (Enum == 28) then -- CALL
 					local A	= Inst[1];
 					local B	= Inst[2];
