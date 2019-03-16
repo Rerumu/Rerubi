@@ -1,6 +1,23 @@
 local Select	= select;
 local Byte		= string.byte;
 local Sub		= string.sub;
+
+local Opmode = {
+	{b = 'OpArgR', c='OpArgN'}, {b = 'OpArgK', c='OpArgN'}, {b = 'OpArgU', c='OpArgU'},
+	{b = 'OpArgR', c='OpArgN'}, {b = 'OpArgU', c='OpArgN'}, {b = 'OpArgK', c='OpArgN'},
+	{b = 'OpArgR', c='OpArgK'}, {b = 'OpArgK', c='OpArgN'}, {b = 'OpArgU', c='OpArgN'},
+	{b = 'OpArgK', c='OpArgK'}, {b = 'OpArgU', c='OpArgU'}, {b = 'OpArgR', c='OpArgK'},
+	{b = 'OpArgK', c='OpArgK'}, {b = 'OpArgK', c='OpArgK'}, {b = 'OpArgK', c='OpArgK'},
+	{b = 'OpArgK', c='OpArgK'}, {b = 'OpArgK', c='OpArgK'}, {b = 'OpArgK', c='OpArgK'},
+	{b = 'OpArgR', c='OpArgN'}, {b = 'OpArgR', c='OpArgN'}, {b = 'OpArgR', c='OpArgN'},
+	{b = 'OpArgR', c='OpArgR'}, {b = 'OpArgR', c='OpArgN'}, {b = 'OpArgK', c='OpArgK'},
+	{b = 'OpArgK', c='OpArgK'}, {b = 'OpArgK', c='OpArgK'}, {b = 'OpArgR', c='OpArgU'},
+	{b = 'OpArgR', c='OpArgU'}, {b = 'OpArgU', c='OpArgU'}, {b = 'OpArgU', c='OpArgU'},
+	{b = 'OpArgU', c='OpArgN'}, {b = 'OpArgR', c='OpArgN'}, {b = 'OpArgR', c='OpArgN'},
+	{b = 'OpArgN', c='OpArgU'}, {b = 'OpArgU', c='OpArgU'}, {b = 'OpArgN', c='OpArgN'},
+	{b = 'OpArgU', c='OpArgN'}, {b = 'OpArgU', c='OpArgN'}
+};
+
 local Opcode	= { -- Opcode types.
 	'ABC',	'ABx',	'ABC',	'ABC';
 	'ABC',	'ABx',	'ABC',	'ABx';
@@ -132,18 +149,22 @@ local function GetMeaning(ByteString)
 			Vargs	= gBits8(); -- Vararg type.
 			Stack	= gBits8(); -- Stack.
 		};
+		local ConstantReferences = {}; -- for an optimization
 
 		if Chunk.Name then
 			Chunk.Name	= Sub(Chunk.Name, 1, -2);
 		end;
+		
 
 		for Idx = 1, gInt() do -- Loading instructions to the chunk.
 			local Data	= gBits32();
 			local Opco	= gBit(Data, 1, 6);
 			local Type	= Opcode[Opco + 1];
+			local Mode  = Opmode[Opco + 1];
+
 			local Inst	= {
-				Value	= Data;
 				Enum	= Opco;
+				Value	= Data;
 				gBit(Data, 7, 14); -- Register A.
 			};
 
@@ -155,6 +176,53 @@ local function GetMeaning(ByteString)
 			elseif (Type == 'AsBx') then
 				Inst[2]	= gBit(Data, 15, 32) - 131071;
 			end;
+
+			-- Precompute data for some instructions
+			do 
+				-- TEST and TESTSET 
+				if Opco == 26 or Opco == 27 then 
+					Inst[3] = Inst[3] == 0;
+				end
+
+				-- EQ, LT, LE
+				if Opco >= 23 and Opco <= 25 then 
+					Inst[1] = Inst[1] ~= 0;
+				end 
+
+				-- Anything that looks at a constant using B
+				if Mode.b == 'OpArgK' then
+					Inst[3] = Inst[3] or false; -- Simply to guarantee that Inst[4] is inserted in the array part
+					if Inst[2] >= 256 then 
+						local Cons = Inst[2] - 256;
+						Inst[4] = Cons;
+
+						local ReferenceData = ConstantReferences[Cons];
+						if not ReferenceData then 
+							ReferenceData = {};
+							ConstantReferences[Cons] = ReferenceData;
+						end
+
+						ReferenceData[#ReferenceData + 1] = {Inst = Inst, Register = 4}
+					end
+				end 
+
+				-- Anything that looks at a constant using C
+				if Mode.c == 'OpArgK' then
+					Inst[4] = Inst[4] or false -- Simply to guarantee that Inst[5] is inserted in the array part
+					if Inst[3] >= 256 then 
+						local Cons = Inst[3] - 256;
+						Inst[5] = Cons;
+
+						local ReferenceData = ConstantReferences[Cons];
+						if not ReferenceData then 
+							ReferenceData = {};
+							ConstantReferences[Cons] = ReferenceData;
+						end
+
+						ReferenceData[#ReferenceData + 1] = {Inst = Inst, Register = 5}
+					end
+				end 
+			end
 
 			Instr[Idx]	= Inst;
 		end;
@@ -171,6 +239,15 @@ local function GetMeaning(ByteString)
 				Cons	= Sub(gString(), 1, -2);
 			end;
 
+			-- Finish precomputing constants
+			local Refs = ConstantReferences[Idx - 1];
+			if Refs then 
+				for i = 1, #Refs do
+					Refs[i].Inst[Refs[i].Register] = Cons
+				end 
+			end
+
+			-- Write Constant to pool
 			Const[Idx - 1]	= Cons;
 		end;
 
@@ -272,7 +349,7 @@ local function Wrap(Chunk, Env, Upvalues)
 				Inst		= Instr[InstrPoint];
 				Enum		= Inst.Enum;
 				InstrPoint	= InstrPoint + 1;
-
+				
 				if (Enum == 0) then -- MOVE
 					Stack[Inst[1]]	= Stack[Inst[2]];
 				elseif (Enum == 1) then -- LOADK
@@ -294,163 +371,42 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 5) then -- GETGLOBAL
 					Stack[Inst[1]]	= Env[Const[Inst[2]]];
 				elseif (Enum == 6) then -- GETTABLE
-					local C		= Inst[3];
 					local Stk	= Stack;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]]	= Stk[Inst[2]][C];
+					Stk[Inst[1]]	= Stk[Inst[2]][Inst[5] or Stk[Inst[3]]];
 				elseif (Enum == 7) then -- SETGLOBAL
 					Env[Const[Inst[2]]]	= Stack[Inst[1]];
 				elseif (Enum == 8) then -- SETUPVAL
 					Upvalues[Inst[2]]	= Stack[Inst[1]];
 				elseif (Enum == 9) then -- SETTABLE
-					local B, C	= Inst[2], Inst[3];
-					local Stk	= Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]][B]	= C;
+					local Stk = Stack
+					Stk[Inst[1]][Inst[4] or Stk[Inst[2]]] = Inst[5] or Stk[Inst[3]]
 				elseif (Enum == 10) then -- NEWTABLE
 					Stack[Inst[1]]	= {};
 				elseif (Enum == 11) then -- SELF
-					local A		= Inst[1];
-					local B		= Inst[2];
-					local C		= Inst[3];
 					local Stk	= Stack;
-
-					B = Stk[B];
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
+					local A		= Inst[1];
+					local B		= Stk[Inst[2]];
+					local C		= Inst[5] or Stk[Inst[3]];
 					Stk[A + 1]	= B;
 					Stk[A]		= B[C];
 				elseif (Enum == 12) then -- ADD
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]]	= B + C;
+					Stk[Inst[1]]	= (Inst[4] or Stk[Inst[2]]) + (Inst[5] or Stk[Inst[3]]);
 				elseif (Enum == 13) then -- SUB
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]]	= B - C;
+					Stk[Inst[1]]	= (Inst[4] or Stk[Inst[2]]) - (Inst[5] or Stk[Inst[3]]);
 				elseif (Enum == 14) then -- MUL
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]]	= B * C;
+					Stk[Inst[1]]	= (Inst[4] or Stk[Inst[2]]) * (Inst[5] or Stk[Inst[3]]);
 				elseif (Enum == 15) then -- DIV
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]]	= B / C;
+					Stk[Inst[1]]	= (Inst[4] or Stk[Inst[2]]) / (Inst[5] or Stk[Inst[3]]);
 				elseif (Enum == 16) then -- MOD
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]]	= B % C;
+					Stk[Inst[1]]	= (Inst[4] or Stk[Inst[2]]) % (Inst[5] or Stk[Inst[3]]);
 				elseif (Enum == 17) then -- POW
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					Stk[Inst[1]]	= B ^ C;
+					Stk[Inst[1]]	= (Inst[4] or Stk[Inst[2]]) ^ (Inst[5] or Stk[Inst[3]]);
 				elseif (Enum == 18) then -- UNM
 					Stack[Inst[1]]	= -Stack[Inst[2]];
 				elseif (Enum == 19) then -- NOT
@@ -470,80 +426,52 @@ local function Wrap(Chunk, Env, Upvalues)
 				elseif (Enum == 22) then -- JMP
 					InstrPoint	= InstrPoint + Inst[2];
 				elseif (Enum == 23) then -- EQ
-					local A	= Inst[1] ~= 0;
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					if (B == C) ~= A then
+					local B = Inst[4] or Stk[Inst[2]];
+					local C = Inst[5] or Stk[Inst[3]];
+					
+					if (B == C) ~= Inst[1] then
 						InstrPoint	= InstrPoint + 1;
 					end;
 				elseif (Enum == 24) then -- LT
-					local A	= Inst[1] ~= 0;
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
-
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					if (B < C) ~= A then
+					local B = Inst[4] or Stk[Inst[2]];
+					local C = Inst[5] or Stk[Inst[3]];
+					
+					if (B < C) ~= Inst[1] then
 						InstrPoint	= InstrPoint + 1;
 					end;
 				elseif (Enum == 25) then -- LE
-					local A	= Inst[1] ~= 0;
-					local B	= Inst[2];
-					local C	= Inst[3];
 					local Stk = Stack;
+					local B = Inst[4] or Stk[Inst[2]];
+					local C = Inst[5] or Stk[Inst[3]];
 
-					if (B > 255) then
-						B	= Const[B - 256];
-					else
-						B	= Stk[B];
-					end;
-
-					if (C > 255) then
-						C	= Const[C - 256];
-					else
-						C	= Stk[C];
-					end;
-
-					if (B <= C) ~= A then
+					if (B <= C) ~= Inst[1] then
 						InstrPoint	= InstrPoint + 1;
 					end;
 				elseif (Enum == 26) then -- TEST
-					if (not not Stack[Inst[1]]) == (Inst[3] == 0) then
-						InstrPoint	= InstrPoint + 1;
-					end;
+				    if Inst[3] then 
+				      if Stack[Inst[1]] then
+				        InstrPoint = InstrPoint + 1;
+				      end
+				    elseif Stack[Inst[1]] then
+				    else 
+				      InstrPoint = InstrPoint + 1;
+				    end
 				elseif (Enum == 27) then -- TESTSET
-					local B	= Stack[Inst[2]];
+					local B = Stack[Inst[2]];
 
-					if (not not B) == (Inst[3] == 0) then
-						InstrPoint	= InstrPoint + 1;
-					else
-						Stack[Inst[1]] = B;
-					end;
+				    if Inst[3] then 
+						if B then
+					    	InstrPoint = InstrPoint + 1;
+						else 
+					    	Stack[Inst[1]] = B
+						end
+				    elseif B then
+				    	Stack[Inst[1]] = B
+				    else 
+				    	InstrPoint = InstrPoint + 1;
+				    end
 				elseif (Enum == 28) then -- CALL
 					local A	= Inst[1];
 					local B	= Inst[2];
