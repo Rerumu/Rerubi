@@ -183,7 +183,7 @@ local function GetMeaning(ByteString)
 				end
 
 				-- EQ, LT, LE
-				if 23 >= Opco and Opco <= 25 then 
+				if Opco >= 23 and Opco <= 25 then 
 					Inst[1] = Inst[1] ~= 0;
 				end 
 
