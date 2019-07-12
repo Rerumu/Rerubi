@@ -545,7 +545,7 @@ local function Wrap(Chunk, Env, Upvalues)
 						Results = {Stk[A]()};
 					end;
 
-					for Index in next, Results do -- get return count
+					for Index in pairs(Results) do -- get return count
 						if (Index > Rets) then
 							Rets = Index;
 						end;
